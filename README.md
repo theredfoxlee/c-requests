@@ -1,5 +1,5 @@
 # c-requests
-simplified libcurl
+
 Hi, m8
 
 This file defines `http_post` and `http_get` functions
