@@ -10,4 +10,3 @@ author: Kamil Janiec
 Behavior of these functions is based on libcurl examples:
 - https://curl.haxx.se/libcurl/c/getinmemory.html
 - https://curl.haxx.se/libcurl/c/post-callback.html
-*/
