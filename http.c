@@ -1,21 +1,56 @@
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <stdlib.h>
+/* Hi, m8
+ *
+ * This file defines `http_post` and `http_get` functions
+ *   -- they are simple wrappers over libcurl library.
+ *
+ * author: Kamil Janiec
+ *
+ * Behavior of these functions is based on libcurl examples:
+ *   https://curl.haxx.se/libcurl/c/getinmemory.html
+ *   https://curl.haxx.se/libcurl/c/post-callback.html
+ */
 
+
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #include <curl/curl.h>
 
-struct data_to_send {
+
+/* `read_callback_data` is used to store data that is ought to be send
+ * as HTTP request's body:
+ * - `data` points to data that is going to be sent,  
+ * - `size` represents actual size of the data.
+ */
+struct read_callback_data {
     const char *data;
     size_t size;
 };
 
-static
-size_t read_callback(void *dest,
-                     size_t size,
-                     size_t nmemb,
-                     void *userp) {
-    struct data_to_send *data = (struct data_to_send *)userp;
+/* `write_callback_data` is used to store data that is received
+ * as HTTP response's body:
+ * - `data` points to data that is received,  
+ * - `size` represents actual size of the data.
+ */
+struct write_callback_data {
+    char *data;
+    size_t size;
+};
+
+/* Function: read_callback
+ * -----------------------
+ * passes as many bytes as possible from `userp` to `dest`.
+ *    It's a callback function registered as CURLOPT_READFUNCTION in libcurl.
+ *
+ *    Since bytes are passed over void* pointer, struct read_callback_data
+ *    is required to store current state of passed data (e.g.: how many bytes
+ *    are left to be send).
+ *
+ * Parameters in callback and return value are libcurl dependent.
+ */
+static size_t
+read_callback(void *dest, size_t size, size_t nmemb, void *userp) {
+    struct read_callback_data *data = (struct read_callback_data *) userp;
     size_t buffer_size = size * nmemb;
 
     if (data->size) {
@@ -27,6 +62,7 @@ size_t read_callback(void *dest,
 
         memcpy(dest, data->data, copy_this_much);
 
+        /* NOTE: We're modifing passed struct. */
         data->data += copy_this_much;
         data->size -= copy_this_much;
 
@@ -36,174 +72,162 @@ size_t read_callback(void *dest,
     return 0;
 }
 
-struct data_to_store {
-    char *data;
-    size_t size;
-};
-
-static
-size_t
-write_callback(void *contents,
-               size_t size,
-               size_t nmemb,
-               void *userp) {
-    size_t realsize = size * nmemb;
-    struct data_to_store *data = (struct data_to_store *)userp;
-
-    char *ptr = realloc(data->data, data->size + realsize + 1);
+/* Function: write_callback
+ * ------------------------
+ * passes as many bytes as possible from `contents` to `userp`.
+ *    It's a callback function registered as CURLOPT_WRITEFUNCTION in libcurl.
+ *
+ *    Since bytes are passed over void* pointer, struct write_callback_data
+ *    is required to store current state of passed data.
+ *
+ * Parameters in callback and return value are libcurl dependent.
+ */
+static size_t
+write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+    struct write_callback_data *data = (struct write_callback_data *) userp;
+    size_t real_size = size * nmemb;
+    
+    /* NOTE: We're modifing passed struct. */
+    char *ptr = realloc(data->data, data->size + real_size + 1);
 
     if (ptr == NULL) {
-        fprintf(stderr, "realloc() failed: %s\n",
-                strerror(errno));
+        fprintf(stderr, "realloc() failed: %s\n", strerror(errno));
         return 0;
     }
 
     data->data = ptr;
-    memcpy(&(data->data[data->size]), contents, realsize);
+    memcpy(&(data->data[data->size]), contents, real_size);
 
-    data->size += realsize;
+    data->size += real_size;
     data->data[data->size] = 0;
 
-    return realsize;
+    return real_size;
 }
 
+/* Function: http_post
+ * ------------------------
+ * crates POST request with JSON as a body.
+ *
+ * NOTE: This function assumes that curl_global_init was spawned.
+ *
+ * host: host part from URI string
+ * port: port part from URI string
+ * path: path part from URI string
+ * json: HTTP request's body
+ * response: HTTP response body (allocated with malloc) / return value
+ *
+ * return: libcurl response code (x > 0), internal failure (-1)
+ */
 int
-http_post(const char *host,
-          unsigned port,
-          const char *path,
-          const char *json,
-          char **_response) {
-    CURL *curl = NULL;
-    CURLcode res;
-
-    char *url = NULL;
-
-    struct data_to_store response;
-
-    response.data = malloc(1);
-    response.size = 0;
-
-    response.data[0] = 0;
-
-    struct data_to_send data;
-
-    data.data = json;
-    data.size = strlen(json);
-
-    res = curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    if (res != CURLE_OK) {
-        fprintf(stderr, "curl_global_init() failed: %s\n",
-                curl_easy_strerror(res));
-        return -1;
-    }
-
-    while (*path && *path == '/') path += 1;
-
-    if (asprintf(&url, "%s:%u/%s", host, port, path) == -1) {
-        fprintf(stderr, "asprintf() failed: %s\n",
-                strerror(errno));
-        return -1;
-    }
-
-    curl = curl_easy_init();
-
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-        curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
-        curl_easy_setopt(curl, CURLOPT_READDATA, &data);
-        // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)data.size);
-
-        res = curl_easy_perform(curl);
-
-        if (res != CURLE_OK) {
-            fprintf(stderr, "curl_easy_perform() failed: %s\n",
-                    curl_easy_strerror(res));
-        }
-
-        curl_easy_cleanup(curl);
-        curl_global_cleanup();
-        
-        *_response = strdup(response.data);
-
-        return (int)res;
-    }
-
-    curl_global_cleanup();
-    return -1;
-}
-
-int
-http_get(const char *host,
-         unsigned port,
-         const char *path,
-         char **_response) {
-    CURL *curl = NULL;
-    CURLcode res;
-
-    char *url = NULL;
-
-    struct data_to_store response;
-
-    response.data = malloc(1);
-    response.size = 0;
-
-    response.data[0] = 0;
-
-
-    res = curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    if (res != CURLE_OK) {
-        fprintf(stderr, "curl_global_init() failed: %s\n",
-                curl_easy_strerror(res));
-        return -1;
-    }
-
-    while (*path && *path == '/') path += 1;
-
-    if (asprintf(&url, "%s:%u/%s", host, port, path) == -1) {
-        fprintf(stderr, "asprintf() failed: %s\n",
-                strerror(errno));
-        return -1;
-    }
-
-    curl = curl_easy_init();
-
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-        // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-      
-        res = curl_easy_perform(curl);
-
-        if (res != CURLE_OK) {
-            fprintf(stderr, "curl_easy_perform() failed: %s\n",
-                    curl_easy_strerror(res));
-        }
-
-        curl_easy_cleanup(curl);
-        curl_global_cleanup();
+http_post(const char *host, unsigned port, const char *path,
+          const char *json, char **response) {
+    char url[PATH_MAX];
     
-        *_response = strdup(response.data);
+    while (*path && *path == '/') path += 1;
 
-        return (int)res;
+    if (snprintf(url, PATH_MAX, "%s:%u/%s", host, port, path) == -1) {
+        fprintf(stderr, "snprintf() failed: %s\n", strerror(errno));
+        return -1;
     }
 
-    curl_global_cleanup();
-    return -1;
+    struct write_callback_data response_data;
+    struct read_callback_data request_data;
+
+    response_data.data = malloc(1);
+    response_data.size = 0;
+
+    request_data.data = json;
+    request_data.size = strlen(json);
+
+    CURL *curl = curl_easy_init();
+
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long) request_data.size);
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
+
+        curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+        curl_easy_setopt(curl, CURLOPT_READDATA, &request_data);
+
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Accept: application/json");
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, "charsets: utf-8");
+
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            fprintf(stderr, "curl_easy_perform() failed: %s\n",
+                    curl_easy_strerror(res));
+        }
+
+        curl_easy_cleanup(curl);
+        *response = response_data.data;
+
+        return (int)res;
+    } else {
+        fprintf(stderr, "curl_easy_init() failed: unknown reason\n");
+        return -1;
+    }
 }
 
+/* Function: http_get
+ * ------------------------
+ * crates GET request.
+ *
+ * NOTE: This function assumes that curl_global_init was spawned.
+ *
+ * host: host part from URI string
+ * port: port part from URI string
+ * path: path part from URI string
+ * response: HTTP response body (allocated with malloc) / return value
+ *
+ * return: libcurl response code (x > 0), internal failure (-1)
+ */
 int
-main(int argc, const char **argv) {
-    char *res = NULL;
-    int ret = http_post("localhost", 5000, "/home", "Hello World", &res);
+http_get(const char *host, unsigned port, const char *path,
+         char **response) {
+    char url[PATH_MAX];
+    
+    while (*path && *path == '/') path += 1;
 
-    printf("%s\n", res);
-    free(res);
-    return ret;
+    if (snprintf(url, PATH_MAX, "%s:%u/%s", host, port, path) == -1) {
+        fprintf(stderr, "snprintf() failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    struct write_callback_data response_data;
+
+    response_data.data = malloc(1);
+    response_data.size = 0;
+
+    CURL *curl = curl_easy_init();
+
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            fprintf(stderr, "curl_easy_perform() failed: %s\n",
+                    curl_easy_strerror(res));
+        }
+
+        curl_easy_cleanup(curl);
+        *response = response_data.data;
+
+        return (int)res;
+    } else {
+        fprintf(stderr, "curl_easy_init() failed: unknown reason\n");
+        return -1;
+    }
 }
