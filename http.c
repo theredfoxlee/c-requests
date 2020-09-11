@@ -231,3 +231,137 @@ http_get(const char *host, unsigned port, const char *path,
         return -1;
     }
 }
+
+/* Function: http_parse_url
+ * ------------------------
+ * parses url.
+ *
+ * url: a whole url (with scheme, port, query - or without)
+ * host: host part from url / return value
+ * port: port part from url / return value
+ * path: path part from url / return value
+ * query: query part from url / return value
+ *
+ * return: internal failure (-1) or success (0)
+ */
+int
+http_parse_url(const char *url, char **host, unsigned *port, char **path, char **query) {
+    CURLU *url_h = curl_url();
+
+    if (url_h == NULL) {
+        fprintf(stderr, "curl_url() failed: out of memory\n");
+        return -1;
+    }
+
+    CURLUcode url_code;
+
+    if ((url_code = curl_url_set(url_h, CURLUPART_URL, url, CURLU_GUESS_SCHEME))) {
+        fprintf(stderr, "curl_url_set(url_h, CURLUPART_URL, %s, 0)"
+                " failed - CURLUcode: %d\n", url, url_code);
+        curl_url_cleanup(url_h);
+        return -1;
+    }
+
+    char *_host = NULL;
+
+    if ((url_code = curl_url_get(url_h, CURLUPART_HOST, &_host, 0))) {
+        fprintf(stderr, "curl_url_get(url_h, CURLUPART_HOST, &_host, 0)"
+                " failed - CURLUcode: %d\n", url_code);
+        curl_url_cleanup(url_h);
+        return -1;
+    }
+
+    char *_port = NULL;
+    unsigned _port_int;
+
+    if ((url_code = curl_url_get(url_h, CURLUPART_PORT, &_port, 0))) {
+        if (url_code == CURLUE_NO_PORT) {
+            _port_int = 80;
+        } else {
+            fprintf(stderr, "curl_url_get(url_h, CURLUPART_PORT, &_port, 0)"
+                    " failed - CURLUcode: %d\n", url_code);
+            curl_url_cleanup(url_h);
+            curl_free(_host);
+            return -1;
+        }
+    } else {
+        _port_int = strtoul(_port, 0L, 10);
+    }
+
+    char *_path = NULL;
+
+    if ((url_code = curl_url_get(url_h, CURLUPART_PATH, &_path, 0))) {
+        fprintf(stderr, "curl_url_get(url_h, CURLUPART_PATH, &_path, 0)"
+                " failed - CURLUcode: %d\n", url_code);
+        curl_url_cleanup(url_h);
+        curl_free(_host);
+        curl_free(_port);
+        return -1;
+    }
+
+    char *_query = NULL;
+
+    if ((url_code = curl_url_get(url_h, CURLUPART_QUERY, &_query, 0))) {
+        if (url_code != CURLUE_NO_QUERY) {
+            fprintf(stderr, "curl_url_get(url_h, CURLUPART_QUERY, &_query, 0)"
+                    " failed - CURLUcode: %d\n", url_code);
+            curl_url_cleanup(url_h);
+            curl_free(_host);
+            curl_free(_port);
+            curl_free(_path);
+            return -1;
+        }
+    }
+
+    *host = strdup(_host);
+    *port = _port_int;
+    *path = strdup(_path);
+    *query = _query ? strdup(_query) : strdup("");
+
+    curl_url_cleanup(url_h);
+    curl_free(_host);
+    curl_free(_port);
+    curl_free(_path);
+    curl_free(_query);
+
+    return 0;
+}
+
+
+int
+main() {
+
+    char *host = NULL, *path = NULL, *query = NULL;
+    unsigned port;
+
+    int ret = http_parse_url("http://wikipedia.com/elo321/123elo?build_id=johnny&name=john",
+                             &host, &port, &path, &query);
+
+    if (ret == -1) {
+        fprintf(stderr, "http_parse_url() failed: %d\n", ret);
+    }
+
+    fprintf(stderr, "host: %s, port: %u, path: %s, query: %s\n", host, port, path, query);
+
+    // -- example 2
+
+    char *host2 = NULL, *path2 = NULL, *query2 = NULL;
+    unsigned port2;
+
+    int ret2 = http_parse_url("wikipedia.com",
+                              &host2, &port2, &path2, &query2);
+
+    if (ret2 == -1) {
+        fprintf(stderr, "http_parse_url() failed: %d\n", ret2);
+    }
+
+    fprintf(stderr, "host: %s, port: %u, path: %s, query: %s\n", host2, port2, path2, query2);
+
+    free(host);
+    free(path);
+    free(query);
+
+    free(host2);
+    free(path2);
+    free(query2);
+}
