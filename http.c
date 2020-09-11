@@ -104,11 +104,38 @@ write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     return real_size;
 }
 
+static int _curl_global_init_spawned = 0;
+static int _curl_global_cleanup_spawned = 0;
+
+/* Function: http_init
+ * ------------------------
+ * init internal structures
+ */
+void
+http_init() {
+    if (!_curl_global_init_spawned) {
+        curl_global_init(CURL_GLOBAL_ALL);
+        _curl_global_init_spawned = 1;
+    }
+}
+
+/* Function: http_init
+ * ------------------------
+ * cleanup internal structures
+ */
+void
+http_cleanup() {
+    if (!_curl_global_cleanup_spawned) {
+        curl_global_cleanup();
+        _curl_global_cleanup_spawned = 1;
+    }
+}
+
 /* Function: http_post
  * ------------------------
  * crates POST request with JSON as a body.
  *
- * NOTE: This function assumes that curl_global_init was spawned.
+ * NOTE: This function assumes that http_init was spawned.
  *
  * host: host part from URI string
  * port: port part from URI string
@@ -181,7 +208,7 @@ http_post(const char *host, unsigned port, const char *path,
  * ------------------------
  * crates GET request.
  *
- * NOTE: This function assumes that curl_global_init was spawned.
+ * NOTE: This function assumes that http_init was spawned.
  *
  * host: host part from URI string
  * port: port part from URI string
