@@ -148,6 +148,16 @@ http_cleanup() {
 int
 http_post(const char *host, unsigned port, const char *path,
           const char *json, char **response) {
+    if (_curl_global_init_spawned != 1) {
+        fprintf(stderr, "http_init() not spawned");
+        return -1;
+    }
+
+    if (_curl_global_cleanup_spawned != 0) {
+        fprintf(stderr, "http_cleanup() spawned");
+        return -1;
+    }
+
     char url[PATH_MAX];
     
     while (*path && *path == '/') path += 1;
@@ -220,6 +230,16 @@ http_post(const char *host, unsigned port, const char *path,
 int
 http_get(const char *host, unsigned port, const char *path,
          char **response) {
+    if (_curl_global_init_spawned != 1) {
+        fprintf(stderr, "http_init() not spawned");
+        return -1;
+    }
+
+    if (_curl_global_cleanup_spawned != 0) {
+        fprintf(stderr, "http_cleanup() spawned");
+        return -1;
+    }
+
     char url[PATH_MAX];
     
     while (*path && *path == '/') path += 1;
